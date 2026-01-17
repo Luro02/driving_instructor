@@ -17,6 +17,8 @@ import 'models/logger.dart';
 import 'view_models/app_banner_controller.dart';
 import 'view_models/wearables_provider.dart';
 
+import 'apps/driving_instructor/local_wearable.dart';
+
 // 1) Global navigator key so we can open dialogs from anywhere
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 
@@ -25,6 +27,8 @@ void main() async {
   LogFileManager logFileManager = await LogFileManager.create();
   initOpenWearableLogger(logFileManager.libLogger);
   initLogger(logFileManager.logger);
+
+  registerDummyWearable();
 
   runApp(
     MultiProvider(
@@ -100,7 +104,8 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       );
     });
 
-    _wearableProvEventSub = wearablesProvider.wearableEventStream.listen((event) {
+    _wearableProvEventSub =
+        wearablesProvider.wearableEventStream.listen((event) {
       if (!mounted) return;
       // show a banner using AppBannerController
       final appBannerController = context.read<AppBannerController>();
@@ -124,8 +129,8 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
             content: Text(
               event.description,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: textColor,
-              ),
+                    color: textColor,
+                  ),
             ),
             backgroundColor: backgroundColor,
             key: ValueKey(id),
