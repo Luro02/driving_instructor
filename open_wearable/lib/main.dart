@@ -17,8 +17,6 @@ import 'models/logger.dart';
 import 'view_models/app_banner_controller.dart';
 import 'view_models/wearables_provider.dart';
 
-import 'apps/driving_instructor/local_wearable.dart';
-
 // 1) Global navigator key so we can open dialogs from anywhere
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 
@@ -27,8 +25,6 @@ void main() async {
   LogFileManager logFileManager = await LogFileManager.create();
   initOpenWearableLogger(logFileManager.libLogger);
   initLogger(logFileManager.logger);
-
-  registerDummyWearable();
 
   runApp(
     MultiProvider(

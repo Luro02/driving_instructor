@@ -4,6 +4,12 @@ import 'dart:math';
 import 'package:open_earable_flutter/open_earable_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:step_progress_indicator/step_progress_indicator.dart';
+import 'sensor.dart';
+import 'utils.dart';
+
+import 'package:provider/provider.dart';
+import 'package:open_wearable/widgets/sensors/values/sensor_value_card.dart';
+import 'package:open_wearable/view_models/sensor_data_provider.dart';
 
 const mediumColDivider = SizedBox(height: 32);
 const smallColDivider = SizedBox(height: 16);
@@ -11,133 +17,15 @@ const largeColDivider = SizedBox(height: 30);
 
 const rowDivider = SizedBox(width: 20);
 
-const int windowSize = 10_000;
-
-/// This class contains all the data provided by the IMU.
-class SensorStatus {
-  List<RollingAverage> accelerometer = [
-    RollingAverage(windowSize),
-    RollingAverage(windowSize),
-    RollingAverage(windowSize),
-  ];
-
-  List<RollingAverage> gyroscope = [
-    RollingAverage(windowSize),
-    RollingAverage(windowSize),
-    RollingAverage(windowSize),
-  ];
-
-  List<RollingAverage> euler = [
-    RollingAverage(windowSize),
-    RollingAverage(windowSize),
-    RollingAverage(windowSize),
-  ];
-
-  double get ax => accelerometer[0].average;
-  double get ay => accelerometer[1].average;
-  double get az => accelerometer[2].average;
-
-  double get gx => gyroscope[0].average;
-  double get gy => gyroscope[1].average;
-  double get gz => gyroscope[2].average;
-
-  double get roll => euler[0].average;
-  double get pitch => euler[1].average;
-  double get yaw => euler[2].average;
-
-  set ax(double value) => accelerometer[0].add(value);
-  set ay(double value) => accelerometer[1].add(value);
-  set az(double value) => accelerometer[2].add(value);
-
-  set gx(double value) => gyroscope[0].add(value);
-  set gy(double value) => gyroscope[1].add(value);
-  set gz(double value) => gyroscope[2].add(value);
-
-  set roll(double value) => euler[0].add(value);
-  set pitch(double value) => euler[1].add(value);
-  set yaw(double value) => euler[2].add(value);
-}
-
-class RollingAverage {
-  final int windowSize;
-  final List<double> _values = [];
-
-  RollingAverage(this.windowSize);
-
-  double add(double value) {
-    _values.add(value);
-    if (_values.length > windowSize) {
-      _values.removeAt(0);
-    }
-
-    return average;
-  }
-
-  double get average {
-    if (_values.isEmpty) return 0.0;
-    return _values.reduce((a, b) => a + b) / _values.length;
-  }
-}
-
-// TODO: Smooth values using rolling average
-
-class SensorTracker {
-  final SensorManager manager;
-
-  const SensorTracker({required this.manager});
-
-  Stream<SensorStatus> streamStatus() {
-    StreamController<SensorStatus> controller =
-        StreamController<SensorStatus>();
-    List<StreamSubscription<SensorValue>> subscriptions = [];
-
-    var lastStatus = SensorStatus();
-    for (var sensor in manager.sensors) {
-      if (!["accelerometer", "gyroscope", "euler"]
-          .contains(sensor.sensorName.toLowerCase())) {
-        continue;
-      }
-
-      var sub = sensor.sensorStream.listen((sensorValue) {
-        if (sensor.sensorName.toLowerCase() == "accelerometer" &&
-            sensorValue is SensorDoubleValue) {
-          lastStatus.ax = sensorValue.values[0];
-          lastStatus.ay = sensorValue.values[1];
-          lastStatus.az = sensorValue.values[2];
-        } else if (sensor.sensorName.toLowerCase() == "gyroscope" &&
-            sensorValue is SensorDoubleValue) {
-          lastStatus.gx = sensorValue.values[0];
-          lastStatus.gy = sensorValue.values[1];
-          lastStatus.gz = sensorValue.values[2];
-        } else if (sensor.sensorName.toLowerCase() == "euler" &&
-            sensorValue is SensorDoubleValue) {
-          lastStatus.roll =
-              sensorValue.values[0] * 57.2957795; // Radians to degrees
-          lastStatus.pitch =
-              sensorValue.values[1] * 57.2957795; // Radians to degrees
-          lastStatus.yaw =
-              sensorValue.values[2] * 57.2957795; // Radians to degrees
-        }
-
-        controller.add(lastStatus);
-      });
-      subscriptions.add(sub);
-    }
-
-    controller.onCancel = () {
-      for (var sub in subscriptions) {
-        sub.cancel();
-      }
-    };
-
-    return controller.stream;
-  }
-}
-
 class DrivingInstructorPage extends StatefulWidget {
+  final Wearable wearable;
   final SensorManager manager;
 
-  const DrivingInstructorPage({super.key, required this.manager});
+  const DrivingInstructorPage({
+    super.key,
+    required this.wearable,
+    required this.manager,
+  });
 
   @override
   State<DrivingInstructorPage> createState() => _DrivingInstructorPageState();
@@ -155,16 +43,114 @@ class MotionDisplay extends StatefulWidget {
   State<MotionDisplay> createState() => _MotionDisplayState();
 }
 
+enum DetectionStatus {
+  none("Detecting...", Colors.grey, Icons.hourglass_empty),
+  left("Looking Left", Colors.green, Icons.turn_left_rounded),
+  stronglyLeft(
+    "Looking Strongly Left",
+    Colors.greenAccent,
+    Icons.arrow_back_rounded,
+  ),
+  right("Looking Right", Colors.lightBlue, Icons.turn_right_rounded),
+  stronglyRight(
+    "Looking Strongly Right",
+    Colors.blueAccent,
+    Icons.arrow_forward_rounded,
+  );
+
+  final String text;
+  final Color color;
+  final IconData icon;
+
+  const DetectionStatus(this.text, this.color, this.icon);
+}
+
+/// This class keeps track of the current head turn state based on the sensor data.
+class DetectionStateMachine {
+  static final double angleThreshold = 15.0; // degrees
+
+  /// The current estimated angle of the head.
+  /// 0.0° is forward, negative is left, positive is right.
+  double currentAngle = 0.0; // looking forward
+
+  /// The last time the state changed, e.g. from left to right or to center.
+  DateTime _lastStateChange = DateTime.now();
+
+  /// The last time the sensor status was updated.
+  DateTime? _lastStatusTime;
+
+  /// Call this function repeatedly with new sensor data to update the state machine.
+  void update(SensorStatus status) {
+    if (_lastStatusTime == null) {
+      _lastStatusTime = status.timestamp;
+      return;
+    }
+
+    _lastStatusTime = status.timestamp;
+
+    var previousStatus = currentStatus();
+    // degrees per second = degrees / seconds
+    //
+    // by multiplying with the seconds it took since the last update,
+    // it will return the angle change since the last update.
+    //
+    // This is a basic integration, assuming constant angular velocity.
+    // Could be improved, but this already works reasonably well.
+    currentAngle += status.gx * (1.0 / 50.0); // TODO: Use actual frequency
+
+    // It could happen that the state machine gets stuck in a specific state,
+    // maybe due to drift, noise or measurement errors.
+    //
+    // To mitigate this, we reset the state to center if no changes have occurred
+    // for a certain amount of time. It assumes that when people are driving,
+    // they generally look forward most of the time, and only glance left/right briefly.
+    if (currentStatus() != previousStatus) {
+      _lastStateChange = DateTime.now();
+    }
+
+    // TODO: Make this configurable
+    if (_lastStateChange.difference(DateTime.now()).inMilliseconds.abs() >
+        4000) {
+      print("Force resetting state machine to center");
+      // Reset to center after some seconds of no changes
+      currentAngle = 0.0;
+      _lastStateChange = DateTime.now();
+    }
+  }
+
+  DetectionStatus currentStatus() {
+    if (currentAngle < -angleThreshold) {
+      if (currentAngle < -angleThreshold * 2) {
+        return DetectionStatus.stronglyLeft;
+      }
+
+      return DetectionStatus.left;
+    } else if (currentAngle > angleThreshold) {
+      if (currentAngle > angleThreshold * 2) {
+        return DetectionStatus.stronglyRight;
+      }
+      return DetectionStatus.right;
+    } else {
+      return DetectionStatus.none;
+    }
+  }
+}
+
 class _MotionDisplayState extends State<MotionDisplay> {
+  static final Duration sensorRefreshInterval = Duration(milliseconds: 100);
+
   SensorStatus currentStatus = SensorStatus();
   StreamSubscription<SensorStatus>? status;
+  DetectionStatus detectionStatus = DetectionStatus.none;
+  DetectionStateMachine stateMachine = DetectionStateMachine();
+  DateTime _lastUpdate = DateTime.now();
 
   @override
   void initState() {
-    status = widget.tracker.streamStatus().listen((SensorStatus sensorStatus) {
-      setState(() {
-        currentStatus = sensorStatus;
-      });
+    status =
+        widget.tracker.streamGyroStatus().listen((SensorStatus sensorStatus) {
+      currentStatus = sensorStatus;
+      _runDetectionLoop();
     });
 
     super.initState();
@@ -176,47 +162,90 @@ class _MotionDisplayState extends State<MotionDisplay> {
     super.dispose();
   }
 
+  void _runDetectionLoop() {
+    stateMachine.update(currentStatus);
+
+    DetectionStatus newStatus = stateMachine.currentStatus();
+
+    if (newStatus != detectionStatus) {
+      print(newStatus);
+      setState(() {
+        detectionStatus = newStatus;
+      });
+    } else if (DateTime.now().difference(_lastUpdate) > sensorRefreshInterval) {
+      setState(() {}); // Refresh graphs/raw numbers
+      _lastUpdate = DateTime.now();
+    }
+  }
+
+  Widget _dataColumn(String label, double value) {
+    return Column(
+      children: [
+        Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+        Text(
+          value.toStringAsFixed(3),
+          style: const TextStyle(fontSize: 18, fontFamily: 'Monospace'),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Text(
-          "AX: ${currentStatus.ax}",
-          style: Theme.of(context).textTheme.bodyLarge,
-        ),
-        Text(
-          "AY: ${currentStatus.ay}",
-          style: Theme.of(context).textTheme.bodyLarge,
-        ),
-        Text(
-          "AZ: ${currentStatus.az}",
-          style: Theme.of(context).textTheme.bodyLarge,
+        DetectionStatusCard(
+          status: detectionStatus.text,
+          statusColor: detectionStatus.color,
+          icon: detectionStatus.icon,
         ),
         mediumColDivider,
-        Text(
-          "GX: ${currentStatus.gx}",
-          style: Theme.of(context).textTheme.bodyLarge,
+        const Text(
+          "Real-time Sensor Data",
+          style: TextStyle(fontWeight: FontWeight.bold),
         ),
-        Text(
-          "GY: ${currentStatus.gy}",
-          style: Theme.of(context).textTheme.bodyLarge,
+        smallColDivider,
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _dataColumn("Gyro X", currentStatus.gx),
+            _dataColumn("Gyro Y", currentStatus.gy),
+            _dataColumn("Gyro Z", currentStatus.gz),
+          ],
         ),
-        Text(
-          "GZ: ${currentStatus.gz}",
-          style: Theme.of(context).textTheme.bodyLarge,
+        smallColDivider,
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _dataColumn("Accel X", currentStatus.ax),
+            _dataColumn("Accel Y", currentStatus.ay),
+            _dataColumn("Accel Z", currentStatus.az),
+          ],
+        ),
+        smallColDivider,
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _dataColumn("Angle", stateMachine.currentAngle),
+          ],
         ),
         mediumColDivider,
-        Text(
-          "Pitch: ${currentStatus.pitch}",
-          style: Theme.of(context).textTheme.bodyLarge,
-        ),
-        Text(
-          "Roll: ${currentStatus.roll}",
-          style: Theme.of(context).textTheme.bodyLarge,
-        ),
-        Text(
-          "Yaw: ${currentStatus.yaw}",
-          style: Theme.of(context).textTheme.bodyLarge,
+        ElevatedButton(
+          onPressed: () async {
+            // TODO: Add a minor calibration screen with instructions like "Place the device on a flat surface",
+            //       and maybe a small timer?
+            await status?.cancel();
+            await widget.tracker
+                .calibrate(targetDuration: Duration(milliseconds: 3000));
+            status = widget.tracker
+                .streamStatus()
+                .listen((SensorStatus sensorStatus) {
+              setState(() {
+                currentStatus = sensorStatus;
+              });
+            });
+          },
+          child: const Text("Calibrate Sensors"),
         ),
       ],
     );
@@ -224,7 +253,6 @@ class _MotionDisplayState extends State<MotionDisplay> {
 }
 
 class _DrivingInstructorPageState extends State<DrivingInstructorPage> {
-  int touchedIndex = -1;
   bool isRecording = false;
 
   @override
@@ -285,7 +313,7 @@ class _DrivingInstructorPageState extends State<DrivingInstructorPage> {
         smallColDivider,
         Center(
           child: MotionDisplay(
-            tracker: SensorTracker(manager: widget.manager),
+            tracker: EsenseSensorTracker(manager: widget.manager),
           ),
         ),
         smallColDivider,
@@ -300,74 +328,6 @@ class _DrivingInstructorPageState extends State<DrivingInstructorPage> {
               timestamp: DateTime.now(),
               kind: Violation.rapidAcceleration,
             ),
-            LogEntry(timestamp: DateTime.now(), kind: Violation.missedBlinking),
-            LogEntry(
-              timestamp: DateTime.now(),
-              kind: Violation.didntCheckBlindspot,
-            ),
-            LogEntry(
-              timestamp: DateTime.now(),
-              kind: Violation.rapidAcceleration,
-            ),
-            LogEntry(timestamp: DateTime.now(), kind: Violation.missedBlinking),
-            LogEntry(
-              timestamp: DateTime.now(),
-              kind: Violation.didntCheckBlindspot,
-            ),
-            LogEntry(
-              timestamp: DateTime.now(),
-              kind: Violation.rapidAcceleration,
-            ),
-            LogEntry(timestamp: DateTime.now(), kind: Violation.missedBlinking),
-            LogEntry(
-              timestamp: DateTime.now(),
-              kind: Violation.didntCheckBlindspot,
-            ),
-            LogEntry(
-              timestamp: DateTime.now(),
-              kind: Violation.rapidAcceleration,
-            ),
-            LogEntry(timestamp: DateTime.now(), kind: Violation.missedBlinking),
-            LogEntry(
-              timestamp: DateTime.now(),
-              kind: Violation.didntCheckBlindspot,
-            ),
-            LogEntry(
-              timestamp: DateTime.now(),
-              kind: Violation.rapidAcceleration,
-            ),
-            LogEntry(timestamp: DateTime.now(), kind: Violation.missedBlinking),
-            LogEntry(
-              timestamp: DateTime.now(),
-              kind: Violation.didntCheckBlindspot,
-            ),
-            LogEntry(
-              timestamp: DateTime.now(),
-              kind: Violation.rapidAcceleration,
-            ),
-            LogEntry(timestamp: DateTime.now(), kind: Violation.missedBlinking),
-            LogEntry(
-              timestamp: DateTime.now(),
-              kind: Violation.didntCheckBlindspot,
-            ),
-            LogEntry(
-              timestamp: DateTime.now(),
-              kind: Violation.rapidAcceleration,
-            ),
-            LogEntry(timestamp: DateTime.now(), kind: Violation.missedBlinking),
-            LogEntry(
-              timestamp: DateTime.now(),
-              kind: Violation.didntCheckBlindspot,
-            ),
-            LogEntry(
-              timestamp: DateTime.now(),
-              kind: Violation.rapidAcceleration,
-            ),
-            LogEntry(timestamp: DateTime.now(), kind: Violation.missedBlinking),
-            LogEntry(
-              timestamp: DateTime.now(),
-              kind: Violation.didntCheckBlindspot,
-            ),
           ],
         ),
       ],
@@ -375,7 +335,70 @@ class _DrivingInstructorPageState extends State<DrivingInstructorPage> {
   }
 
   Widget _buildSettingsView() {
-    return Center(child: Text("Settings"));
+    var children = <Widget>[];
+
+    for (var sensor in widget.manager.sensors) {
+      var wrappedSensor =
+          EsenseSensorWrapper(sensor: sensor, samplingFrequencyHz: 50.0);
+      children.add(
+        ChangeNotifierProvider.value(
+          value: SensorDataProvider(sensor: wrappedSensor),
+          child: SensorValueCard(
+            sensor: wrappedSensor,
+            wearable: widget.wearable,
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: children,
+    );
+  }
+}
+
+class DetectionStatusCard extends StatelessWidget {
+  final Color _statusColor;
+  final String _status;
+  final IconData _icon;
+
+  const DetectionStatusCard({
+    super.key,
+    required String status,
+    required Color statusColor,
+    required IconData icon,
+  })  : _status = status,
+        _statusColor = statusColor,
+        _icon = icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(30),
+      decoration: BoxDecoration(
+        color: _statusColor.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: _statusColor, width: 2),
+      ),
+      child: Column(
+        children: [
+          Icon(_icon, size: 50, color: _statusColor),
+          const SizedBox(height: 10),
+          Text(
+            _status,
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+              color: _statusColor,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -424,20 +447,6 @@ class EcoScore extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-extension IntersperseExtension<T> on List<T> {
-  List<U> intersperse<U extends T>(U element) {
-    if (length < 2) return this as List<U>;
-    final List<U> result = [];
-    for (var i = 0; i < length; i++) {
-      result.add(this[i] as U);
-      if (i < length - 1) {
-        result.add(element);
-      }
-    }
-    return result;
   }
 }
 

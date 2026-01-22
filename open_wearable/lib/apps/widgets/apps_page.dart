@@ -86,9 +86,11 @@ List<AppInfo> _apps = [
           );
         }
 
-        // TODO: Allow passing wearable sensor here
+        var sensorManager = wearable.requireCapability<SensorManager>();
         return DrivingInstructorPage(
-            manager: wearable.requireCapability<SensorManager>());
+          wearable: wearable,
+          manager: sensorManager,
+        );
       },
     ),
   ),
