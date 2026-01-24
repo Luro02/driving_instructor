@@ -43,7 +43,7 @@ class MyCustomWearableFactory extends WearableFactory {
           chartTitle: "Accelerometer",
           shortChartTitle: "Accel",
           axisNames: ["X", "Y", "Z"],
-          axisUnits: ["g", "g", "g"], // TODO: convert to m/s²?
+          axisUnits: ["m/s²", "m/s²", "m/s²"],
           relatedConfigurations: [],
         ),
         DummySensor(
@@ -175,8 +175,6 @@ class DummySensor extends Sensor<SensorDoubleValue> {
     double dt =
         timestamp.difference(_sensorState.lastUpdate).inMilliseconds / 1000.0;
 
-    // TODO: Is this specific to the earable device?
-    // x, y, z was changed in firmware to -x, z, y
     _mahonyAHRS.update(
       ax,
       ay,
@@ -227,7 +225,6 @@ class DummySensor extends Sensor<SensorDoubleValue> {
 
         streamController.add(parsedData);
       },
-      // TODO: original code had an onError handler here
     );
 
     var gyroSubscription = gyroscopeEventStream().listen(
@@ -240,7 +237,6 @@ class DummySensor extends Sensor<SensorDoubleValue> {
 
         streamController.add(parsedData);
       },
-      // TODO: original code had an onError handler here
     );
 
     streamController.onCancel = () {

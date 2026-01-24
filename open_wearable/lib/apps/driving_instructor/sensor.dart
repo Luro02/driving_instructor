@@ -6,6 +6,9 @@ import 'package:vector_math/vector_math.dart';
 import 'package:open_wearable/apps/driving_instructor/utils.dart';
 
 /// This class contains all the data provided by the IMU.
+///
+/// It is simpler to bundle them in one class instead of having multiple
+/// streams for each sensor.
 class SensorStatus {
   Vector3 accelerometer = Vector3(0.0, 0.0, 0.0);
   Vector3 gyroscope = Vector3(0.0, 0.0, 0.0);
@@ -21,10 +24,6 @@ class SensorStatus {
   double get gy => gyroscope.y;
   double get gz => gyroscope.z;
 
-  double get roll => euler.x;
-  double get pitch => euler.y;
-  double get yaw => euler.z;
-
   set ax(double value) => accelerometer.x = value;
   set ay(double value) => accelerometer.y = value;
   set az(double value) => accelerometer.z = value;
@@ -32,13 +31,9 @@ class SensorStatus {
   set gx(double value) => gyroscope.x = value;
   set gy(double value) => gyroscope.y = value;
   set gz(double value) => gyroscope.z = value;
-
-  set roll(double value) => euler.x = value;
-  set pitch(double value) => euler.y = value;
-  set yaw(double value) => euler.z = value;
 }
 
-bool isCloserToTarget(double value, double target, double bestSoFar) {
+bool _isCloserToTarget(double value, double target, double bestSoFar) {
   return (value - target).abs() < (bestSoFar - target).abs();
 }
 
@@ -47,6 +42,7 @@ abstract class SensorTracker {
     Duration targetDuration = const Duration(milliseconds: 500),
   });
 
+  // TODO: It might be better to refactor streamGyroStatus to return a Vector3?
   Stream<SensorStatus> streamStatus();
 
   Stream<SensorStatus> streamGyroStatus();
@@ -60,7 +56,7 @@ class EsenseSensorTracker implements SensorTracker {
 
   EsenseSensorTracker({
     required this.manager,
-    double targetFrequencyHz = 50.0,
+    required double targetFrequencyHz,
   }) {
     for (var sensor in manager.sensors) {
       if (!["accelerometer", "gyroscope"]
@@ -249,6 +245,12 @@ class EsenseSensorWrapper extends SensorDelegator<SensorDoubleValue> {
     }
   }
 
+  @override
+  List<String> get axisUnits => switch (sensor.sensorName.toLowerCase()) {
+        "accelerometer" => ["m/s²", "m/s²", "m/s²"],
+        _ => super.axisUnits,
+      };
+
   Duration timestampDuration(int timestamp) {
     double inSeconds = timestamp * pow(10, timestampExponent).toDouble();
 
@@ -275,7 +277,7 @@ class EsenseSensorWrapper extends SensorDelegator<SensorDoubleValue> {
       }
 
       if (desiredConfig == null ||
-          isCloserToTarget(
+          _isCloserToTarget(
             value.frequencyHz,
             targetFrequencyHz,
             desiredConfig.frequencyHz,
@@ -319,7 +321,6 @@ class EsenseSensorWrapper extends SensorDelegator<SensorDoubleValue> {
           }
 
           var convertedValues =
-              // TODO: Update axis units to m/s² in the sensor definition
               event.values.map((v) => v * 9.80665).toList(growable: false);
           return SensorDoubleValue(
             values: convertedValues,
@@ -333,8 +334,7 @@ class EsenseSensorWrapper extends SensorDelegator<SensorDoubleValue> {
                 filters["gyroscope"]![i].filtered(event.values[i]);
           }
           return event;
-        }) // TODO: Add rolling average again /*.rollingAverage((samplingFrequencyHz * 0.5).toInt())*/
-            ;
+        }).rollingAverage((samplingFrequencyHz * 0.5).toInt());
       default:
         return super.sensorStream;
     }

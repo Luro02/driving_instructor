@@ -8,6 +8,8 @@ import 'package:open_wearable/apps/driving_instructor/driving_instructor.dart';
 import 'package:open_wearable/apps/posture_tracker/view/posture_tracker_view.dart';
 import 'package:open_wearable/apps/widgets/select_earable_view.dart';
 import 'package:open_wearable/apps/widgets/app_tile.dart';
+import 'package:open_wearable/apps/driving_instructor/location.dart';
+import 'package:open_wearable/apps/driving_instructor/settings.dart';
 
 import '../../widgets/devices/connect_devices_page.dart';
 
@@ -87,9 +89,30 @@ List<AppInfo> _apps = [
         }
 
         var sensorManager = wearable.requireCapability<SensorManager>();
-        return DrivingInstructorPage(
-          wearable: wearable,
-          manager: sensorManager,
+        return FutureBuilder(
+          future: Future(() async {
+            // These are async, and have to be loaded beforehand
+            await CurrentLocationTracker().init();
+            await ActiveSettings().init();
+            return true;
+          }),
+          builder: (context, snapshot) {
+            if (!snapshot.hasData) {
+              return PlatformScaffold(
+                appBar: PlatformAppBar(
+                  title: PlatformText("Driving Instructor"),
+                ),
+                body: Center(
+                  child: PlatformCircularProgressIndicator(),
+                ),
+              );
+            }
+
+            return DrivingInstructorPage(
+              wearable: wearable,
+              manager: sensorManager,
+            );
+          },
         );
       },
     ),

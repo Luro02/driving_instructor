@@ -56,9 +56,13 @@ dependencies:
 
   # dependencies for driving_instructor
   step_progress_indicator: ^1.0.2
-  flutter_compass: ^0.8.1
   sensors_plus: ^7.0.0
   vector_math: ^2.2.0
+  intl: ^0.20.2
+  flutter_map: ^8.2.2
+  latlong2: ^0.9.1
+  flutter_map_location_marker: ^10.2.0
+  geolocator: ^14.0.2
 
 dev_dependencies:
   flutter_test:

@@ -1,7 +1,17 @@
 import 'dart:async';
 
+import 'package:flutter/material.dart';
 import 'package:open_earable_flutter/open_earable_flutter.dart';
 import 'package:vector_math/vector_math.dart';
+
+const mediumColDivider = SizedBox(height: 32);
+const smallColDivider = SizedBox(height: 16);
+const largeColDivider = SizedBox(height: 30);
+
+const rowDivider = SizedBox(width: 20);
+
+const EdgeInsets itemPadding =
+    EdgeInsets.symmetric(horizontal: 16, vertical: 8);
 
 extension VectorStreamExt on Stream<Vector3> {
   /// Implements a rolling average over the stream of Vector3 data
@@ -149,5 +159,71 @@ class SimpleKalman {
     _lastEstimate = currentEstimate;
 
     return currentEstimate;
+  }
+}
+
+class PopupWindow extends StatelessWidget {
+  final String title;
+  final Widget child;
+
+  const PopupWindow({super.key, required this.title, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(title),
+        centerTitle: false,
+        leading: IconButton(
+          icon: const Icon(Icons.close),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
+      body: Padding(
+        padding: itemPadding,
+        child: child,
+      ),
+    );
+  }
+}
+
+Future<Object?> openPopupWindow({
+  required BuildContext context,
+  required String title,
+  required Widget child,
+}) async {
+  return Navigator.push(
+    context,
+    PageRouteBuilder(
+      fullscreenDialog: true,
+      transitionDuration: Duration.zero,
+      reverseTransitionDuration: Duration.zero,
+      pageBuilder: (context, animation1, animation2) => PopupWindow(
+        title: title,
+        child: child,
+      ),
+    ),
+  );
+}
+
+class SectionName extends StatelessWidget {
+  final String name;
+
+  const SectionName({super.key, required this.name});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 24, 16, 8),
+      child: Text(
+        name.toUpperCase(),
+        style: TextStyle(
+          color: Theme.of(context).primaryColor,
+          fontWeight: FontWeight.bold,
+          fontSize: 12,
+          letterSpacing: 1.2,
+        ),
+      ),
+    );
   }
 }
