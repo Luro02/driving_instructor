@@ -10,12 +10,12 @@ import 'package:open_wearable/apps/driving_instructor/settings.dart';
 
 /// Always displaying the dates like this 2026-01-24 10:30 is awful to look at,
 /// this function returns a smarter representation of the date.
-String getSmartDate(DateTime date) {
+String getSmartDate(DateTime date, {bool showDate = true}) {
   final now = DateTime.now();
   final today = DateTime(now.year, now.month, now.day);
 
   // checks if the date is today, in which case we omit the date part
-  if (DateTime(date.year, date.month, date.day) == today) {
+  if (DateTime(date.year, date.month, date.day) == today || !showDate) {
     return DateFormat.Hms().format(date); // "10:30"
   }
 
@@ -82,16 +82,23 @@ class LogEntryCard extends StatelessWidget {
       color: Theme.of(context).colorScheme.surface,
       child: ListTile(
         leading: Icon(kind.icon),
-        title: Text(
-          kind.name,
-          style: TextStyle(fontWeight: FontWeight.bold),
+        title: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: Text(
+                kind.name,
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+            Text(
+              getSmartDate(timestamp),
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+            ),
+          ],
         ),
         visualDensity: VisualDensity.comfortable,
         subtitle: Text(kind.description),
-        trailing: Text(
-          getSmartDate(timestamp),
-          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-        ),
         onTap: () => openPopupWindow(
           context: context,
           title: "Details",
@@ -216,8 +223,12 @@ enum LogKind {
     "Acceleration",
     "Slowly accelerating helps to improve fuel efficiency and provides a smoother driving experience.",
     Icons.speed,
+  ),
+  braking(
+    "Braking",
+    "It is important to brake gently to ensure passenger comfort and maintain vehicle control.",
+    Icons.car_crash,
   );
-  // TODO: Add one for braking as well?
 
   final String name;
   final String description;
@@ -278,8 +289,8 @@ enum LogKind {
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
             smallColDivider,
-            RichText(
-              text: TextSpan(
+            Text.rich(
+              TextSpan(
                 children: [
                   const TextSpan(
                     text:
@@ -287,6 +298,39 @@ enum LogKind {
                   ),
                   TextSpan(
                     text: ActiveSettings().accelerationThreshold().toString(),
+                    style:
+                        Theme.of(context).primaryTextTheme.bodyMedium?.copyWith(
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                  ),
+                  const TextSpan(text: " m/s²."),
+                ],
+              ),
+            ),
+            smallColDivider,
+            Text(
+              "If this is too sensitive, consider changing the settings.",
+            ),
+          ],
+        );
+      case LogKind.braking:
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              description,
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            smallColDivider,
+            Text.rich(
+              TextSpan(
+                children: [
+                  const TextSpan(
+                    text:
+                        "This issue is logged when the driver brakes too strongly, exceeding ",
+                  ),
+                  TextSpan(
+                    text: ActiveSettings().brakingThreshold().toString(),
                     style:
                         Theme.of(context).primaryTextTheme.bodyMedium?.copyWith(
                               color: Theme.of(context).colorScheme.primary,

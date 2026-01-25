@@ -215,8 +215,8 @@ class DummySensor extends Sensor<SensorDoubleValue> {
   Stream<Map<String, dynamic>> subscribeToSensorData() {
     StreamController<Map<String, dynamic>> streamController =
         StreamController();
-    var accelSubscription = accelerometerEventStream().listen(
-      (AccelerometerEvent event) {
+    var accelSubscription = userAccelerometerEventStream().listen(
+      (UserAccelerometerEvent event) {
         _sensorState.ax = event.x;
         _sensorState.ay = event.y;
         _sensorState.az = event.z;

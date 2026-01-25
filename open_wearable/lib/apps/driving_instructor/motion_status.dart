@@ -6,6 +6,7 @@ import 'package:open_wearable/apps/driving_instructor/logs.dart';
 import 'package:open_wearable/apps/driving_instructor/sensor.dart';
 import 'package:open_wearable/apps/driving_instructor/utils.dart';
 import 'package:open_wearable/apps/driving_instructor/settings.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 
 /// This enum represents the different detected motion states.
 ///
@@ -24,7 +25,9 @@ enum _DetectionStatus {
     "Looking Strongly Right",
     Colors.blueAccent,
     Icons.arrow_forward_rounded,
-  );
+  ),
+  acceleration("Accelerating", Colors.orange, Icons.speed),
+  braking("Braking", Colors.redAccent, Icons.car_crash);
 
   final String text;
   final Color color;
@@ -94,85 +97,150 @@ class _DetectionStateMachine {
   /// Computes the current detection status based on the current angle.
   _DetectionStatus currentStatus() {
     if (currentAngle < -angleThreshold) {
-      if (currentAngle < -angleThreshold * 2) {
-        return _DetectionStatus.stronglyLeft;
-      }
-
-      return _DetectionStatus.left;
-    } else if (currentAngle > angleThreshold) {
-      if (currentAngle > angleThreshold * 2) {
-        return _DetectionStatus.stronglyRight;
-      }
-      return _DetectionStatus.right;
-    } else {
-      return _DetectionStatus.none;
+      return currentAngle < -strongAngleThreshold
+          ? _DetectionStatus.stronglyLeft
+          : _DetectionStatus.left;
     }
+
+    if (currentAngle > angleThreshold) {
+      return currentAngle > strongAngleThreshold
+          ? _DetectionStatus.stronglyRight
+          : _DetectionStatus.right;
+    }
+
+    return _DetectionStatus.none;
   }
 }
 
-/// This widget displays the current motion status of the user.
-///
-/// It is what will be shown when the user starts the recording session.
-class MotionDisplay extends StatefulWidget {
-  final SensorTracker tracker;
+/// This class tracks the linear acceleration of the phone
+/// to detect acceleration and braking events.
+class _AccelerationTracker extends ValueNotifier<_DetectionStatus> {
+  StreamSubscription? _streamSubscription;
 
-  const MotionDisplay({
-    super.key,
-    required this.tracker,
-  });
+  DateTime _lastDetectionTime = DateTime.now();
 
-  @override
-  State<MotionDisplay> createState() => _MotionDisplayState();
-}
+  UserAccelerometerEvent? userAccelEvent;
 
-// TODO: How about separating the detection logic from the display logic?
+  final int sessionId;
 
-class _MotionDisplayState extends State<MotionDisplay> {
-  static final Duration sensorRefreshInterval = Duration(milliseconds: 100);
+  _AccelerationTracker({required this.sessionId})
+      : super(_DetectionStatus.none) {
+    startTracking();
+  }
 
-  SensorStatus currentStatus = SensorStatus();
-  StreamSubscription<SensorStatus>? status;
-  _DetectionStatus detectionStatus = _DetectionStatus.none;
-  _DetectionStateMachine stateMachine = _DetectionStateMachine();
-  DateTime _lastUpdate = DateTime.now();
+  void startTracking() {
+    _lastDetectionTime = DateTime.now();
+    if (_streamSubscription != null) {
+      return; // already started
+    }
 
-  DateTime _lastLeftMirrorCheck = DateTime.now();
-  DateTime _lastRightMirrorCheck = DateTime.now();
+    // Initially I planned on using the accelerometer stream,
+    // which exposes the raw accelerometer data of the phone,
+    // but gravity is interfering too much with the data, resulting
+    // in a lot of false positives.
+    //
+    // For example going uphill or downhill will result in a constant acceleration
+    // on the relevant axis, which would be detected as acceleration/braking.
+    //
+    // The user event stream has these filtered out, providing much cleaner data to work with.
 
-  late final int sessionId;
+    _streamSubscription = userAccelerometerEventStream(
+      samplingPeriod: SensorInterval.gameInterval,
+    ).listen((UserAccelerometerEvent event) {
+      userAccelEvent = event;
 
-  @override
-  void initState() {
-    // TODO: For now this exclusively uses gyro data for head turn detection.
-    // Therefore accel data is not shown at all.
-    status =
-        widget.tracker.streamGyroStatus().listen((SensorStatus sensorStatus) {
-      currentStatus = sensorStatus;
-      _runDetectionLoop();
+      if (super.value == _DetectionStatus.none &&
+          event.y > ActiveSettings().accelerationThreshold()) {
+        print("Detected acceleration event: ${event.y}");
+        super.value = _DetectionStatus.acceleration;
+      } else if (super.value == _DetectionStatus.none &&
+          event.y < ActiveSettings().brakingThreshold()) {
+        print("Detected braking event: ${event.y}");
+        super.value = _DetectionStatus.braking;
+      } else if (super.value != _DetectionStatus.none &&
+          // This debounce ensures that we don't log multiple events in quick succession
+          // that might be caused by noise or unexpected driving behavior.
+          DateTime.now().difference(_lastDetectionTime) >
+              Duration(seconds: 3) &&
+          event.y.abs() < ActiveSettings().accelDetectionEnd()) {
+        print("Adding acceleration/braking log entry");
+        ActiveSettings().addLogEntry(
+          LogEntryCard(
+            kind: _DetectionStatus.acceleration == super.value
+                ? LogKind.acceleration
+                : LogKind.braking,
+            timestamp: DateTime.now(),
+            location: CurrentLocationTracker().currentLocation(),
+            drivingSession: sessionId,
+          ),
+        );
+        super.value = _DetectionStatus.none;
+      }
     });
-    sessionId = ActiveSettings().addDrivingSession(DateTime.now());
+  }
 
-    super.initState();
+  void stopTracking() {
+    _streamSubscription?.cancel();
+    _streamSubscription = null;
   }
 
   @override
   void dispose() {
-    status?.cancel();
-    ActiveSettings().setDrivingSessionEndTime(sessionId, DateTime.now());
+    stopTracking();
+    super.dispose();
+  }
+}
+
+/// This class tracks the mirror checks of the user based on the gyroscope data
+/// of the esense wearable.
+///
+/// It logs an awareness log entry if the user hasn't looked left/right
+/// for a certain amount of time.
+class _MirrorTracker extends ValueNotifier<_DetectionStatus> {
+  DateTime _lastLeftMirrorCheck = DateTime.now();
+  DateTime _lastRightMirrorCheck = DateTime.now();
+
+  StreamSubscription<SensorStatus>? _streamSubscription;
+  _DetectionStateMachine stateMachine = _DetectionStateMachine();
+
+  final int sessionId;
+
+  _MirrorTracker({required this.sessionId, required SensorTracker tracker})
+      : super(_DetectionStatus.none) {
+    startTracking(tracker);
+  }
+
+  void startTracking(SensorTracker tracker) {
+    print("Starting mirror tracking");
+    if (_streamSubscription != null) {
+      return; // already started
+    }
+
+    _streamSubscription = tracker.streamGyroStatus().listen(_evaluateStatus);
+  }
+
+  void stopTracking() {
+    print("Stopping mirror tracking");
+    _streamSubscription?.cancel();
+    _streamSubscription = null;
+  }
+
+  @override
+  void dispose() {
+    stopTracking();
     super.dispose();
   }
 
-  void _runDetectionLoop() {
+  void _evaluateStatus(SensorStatus currentStatus) {
     stateMachine.update(currentStatus);
 
     _DetectionStatus newStatus = stateMachine.currentStatus();
 
-    if (newStatus != detectionStatus) {
+    if (newStatus != super.value) {
       print(newStatus);
 
       print("Updating mirror check timestamps");
       switch (newStatus) {
-        // TODO: maybe use strongly left/right for mirror checks?
         case _DetectionStatus.left:
           _lastLeftMirrorCheck = DateTime.now();
           break;
@@ -183,35 +251,221 @@ class _MotionDisplayState extends State<MotionDisplay> {
           break;
       }
 
-      setState(() {
-        detectionStatus = newStatus;
-      });
-    } else if (DateTime.now().difference(_lastUpdate) > sensorRefreshInterval) {
-      setState(() {}); // Refresh graphs/raw numbers
-      _lastUpdate = DateTime.now();
+      super.value = newStatus;
+    }
 
-      Duration mirrorCheckInterval = ActiveSettings().mirrorCheckDuration();
+    Duration mirrorCheckInterval = ActiveSettings().mirrorCheckDuration();
 
-      if (DateTime.now().difference(_lastLeftMirrorCheck) >
-              mirrorCheckInterval ||
-          DateTime.now().difference(_lastRightMirrorCheck) >
-              mirrorCheckInterval) {
-        print("Adding awareness log entry");
-        _lastLeftMirrorCheck = DateTime.now();
-        _lastRightMirrorCheck = DateTime.now();
+    if (DateTime.now().difference(_lastLeftMirrorCheck) > mirrorCheckInterval ||
+        DateTime.now().difference(_lastRightMirrorCheck) >
+            mirrorCheckInterval) {
+      print("Adding awareness log entry");
+      _lastLeftMirrorCheck = DateTime.now();
+      _lastRightMirrorCheck = DateTime.now();
 
-        // Add a log entry:
-        ActiveSettings().addLogEntry(
-          LogEntryCard(
-            kind: LogKind.awareness,
-            timestamp: DateTime.now(),
-            location: CurrentLocationTracker().currentLocation(),
-            drivingSession: sessionId,
-          ),
-        );
-      }
+      // Add a log entry:
+      ActiveSettings().addLogEntry(
+        LogEntryCard(
+          kind: LogKind.awareness,
+          timestamp: DateTime.now(),
+          location: CurrentLocationTracker().currentLocation(),
+          drivingSession: sessionId,
+        ),
+      );
     }
   }
+}
+
+/// This widget displays the current motion status of the user.
+///
+/// It is what will be shown when the user starts the recording session.
+class MotionDisplay extends StatefulWidget {
+  final SensorTracker tracker;
+  final int sessionId;
+
+  const MotionDisplay({
+    super.key,
+    required this.tracker,
+    required this.sessionId,
+  });
+
+  @override
+  State<MotionDisplay> createState() => _MotionDisplayState();
+}
+
+class _MotionDisplayState extends State<MotionDisplay> {
+  static final Duration sensorRefreshInterval = Duration(milliseconds: 100);
+
+  SensorStatus _currentStatus = SensorStatus();
+  StreamSubscription<SensorStatus>? _streamSubscription;
+  DateTime _lastUpdate = DateTime.now();
+
+  late _MirrorTracker _mirrorTracker;
+  late _AccelerationTracker _accelTracker;
+
+  @override
+  void initState() {
+    _startTracking();
+
+    super.initState();
+  }
+
+  void _startTracking() {
+    _mirrorTracker =
+        _MirrorTracker(sessionId: widget.sessionId, tracker: widget.tracker);
+    _accelTracker = _AccelerationTracker(sessionId: widget.sessionId);
+
+    _streamSubscription =
+        widget.tracker.streamGyroStatus().listen((SensorStatus sensorStatus) {
+      if (DateTime.now().difference(_lastUpdate) > sensorRefreshInterval) {
+        setState(() {
+          _currentStatus = sensorStatus;
+        });
+        _lastUpdate = DateTime.now();
+      }
+    });
+  }
+
+  @override
+  void activate() {
+    _startTracking();
+    super.activate();
+  }
+
+  @override
+  void deactivate() {
+    _stopTracking();
+    super.deactivate();
+  }
+
+  void _stopTracking() {
+    _streamSubscription?.cancel();
+    _accelTracker.stopTracking();
+    _mirrorTracker.stopTracking();
+  }
+
+  @override
+  void dispose() {
+    _stopTracking();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        ListenableBuilder(
+          listenable: Listenable.merge([_mirrorTracker, _accelTracker]),
+          builder: (context, child) {
+            var detectionStatus = _mirrorTracker.value;
+            var detectionAccelStatus = _accelTracker.value;
+
+            // These events are independent, so acceleration/braking can occur while the driver is looking left/right.
+            //
+            // Ideally both should be shown:
+            //
+            // Mirror | Acceleration | Display
+            // ------------------------------
+            // None   | None         | None
+            // Left   | None         | Left
+            // Right  | None         | Right
+            // None   | Accel        | Accel
+            // None   | Braking      | Braking
+            // Left   | Accel        | Left + Accel
+            // Right  | Braking      | Right + Braking
+            // etc.
+
+            if (detectionAccelStatus == _DetectionStatus.none) {
+              return SizedBox(
+                width: MediaQuery.of(context).size.width - 20.0,
+                child: _DetectionStatusCard(
+                  status: detectionStatus.text,
+                  statusColor: detectionStatus.color,
+                  icon: detectionStatus.icon,
+                ),
+              );
+            }
+
+            if (detectionStatus == _DetectionStatus.none) {
+              return SizedBox(
+                width: MediaQuery.of(context).size.width - 20.0,
+                child: _DetectionStatusCard(
+                  status: detectionAccelStatus.text,
+                  statusColor: detectionAccelStatus.color,
+                  icon: detectionAccelStatus.icon,
+                ),
+              );
+            }
+
+            var targetWidth = (MediaQuery.of(context).size.width - 30.0) / 2.0;
+
+            return Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                SizedBox(
+                  width: targetWidth,
+                  child: _DetectionStatusCard(
+                    status: detectionStatus.text,
+                    statusColor: detectionStatus.color,
+                    icon: detectionStatus.icon,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: targetWidth,
+                  child: _DetectionStatusCard(
+                    status: detectionAccelStatus.text,
+                    statusColor: detectionAccelStatus.color,
+                    icon: detectionAccelStatus.icon,
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+        if (ActiveSettings().showDebugInformation())
+          ..._buildDebugInfo(context),
+      ],
+    );
+  }
+
+  Iterable<Widget> _buildDebugInfo(BuildContext context) {
+    return [
+      smallColDivider,
+      const Text(
+        "Real-time Sensor Data",
+        style: TextStyle(fontWeight: FontWeight.bold),
+      ),
+      smallColDivider,
+      _SensorDataRow(
+        data: {
+          "Gyro X": _currentStatus.gx,
+          "Gyro Y": _currentStatus.gy,
+          "Gyro Z": _currentStatus.gz,
+        },
+      ),
+      smallColDivider,
+      _SensorDataRow(
+        data: {
+          "Accel X": _accelTracker.userAccelEvent?.x ?? 0.0,
+          "Accel Y": _accelTracker.userAccelEvent?.y ?? 0.0,
+          "Accel Z": _accelTracker.userAccelEvent?.z ?? 0.0,
+        },
+      ),
+      smallColDivider,
+      _SensorDataRow(
+        data: {
+          "Angle": _mirrorTracker.stateMachine.currentAngle,
+        },
+      ),
+    ];
+  }
+}
+
+class _SensorDataRow extends StatelessWidget {
+  final Map<String, double> data;
+
+  const _SensorDataRow({required this.data});
 
   Widget _dataColumn(String label, double value) {
     return Column(
@@ -227,44 +481,11 @@ class _MotionDisplayState extends State<MotionDisplay> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        _DetectionStatusCard(
-          status: detectionStatus.text,
-          statusColor: detectionStatus.color,
-          icon: detectionStatus.icon,
-        ),
-        mediumColDivider,
-        const Text(
-          "Real-time Sensor Data",
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-        smallColDivider,
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: [
-            _dataColumn("Gyro X", currentStatus.gx),
-            _dataColumn("Gyro Y", currentStatus.gy),
-            _dataColumn("Gyro Z", currentStatus.gz),
-          ],
-        ),
-        smallColDivider,
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: [
-            _dataColumn("Accel X", currentStatus.ax),
-            _dataColumn("Accel Y", currentStatus.ay),
-            _dataColumn("Accel Z", currentStatus.az),
-          ],
-        ),
-        smallColDivider,
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: [
-            _dataColumn("Angle", stateMachine.currentAngle),
-          ],
-        ),
-      ],
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceAround,
+      children: data.entries
+          .map((entry) => _dataColumn(entry.key, entry.value))
+          .toList(),
     );
   }
 }
@@ -286,7 +507,6 @@ class _DetectionStatusCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: double.infinity,
       padding: const EdgeInsets.all(30),
       decoration: BoxDecoration(
         color: _statusColor.withValues(alpha: 0.1),
@@ -304,7 +524,6 @@ class _DetectionStatusCard extends StatelessWidget {
               fontWeight: FontWeight.bold,
               color: _statusColor,
             ),
-            textAlign: TextAlign.center,
           ),
         ],
       ),

@@ -2,6 +2,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_platform_widgets/flutter_platform_widgets.dart';
 import 'package:open_earable_flutter/open_earable_flutter.dart';
+import 'package:open_wearable/apps/driving_instructor/asset_finder.dart';
 import 'package:open_wearable/apps/heart_tracker/widgets/heart_tracker_page.dart';
 import 'package:open_wearable/apps/posture_tracker/model/earable_attitude_tracker.dart';
 import 'package:open_wearable/apps/driving_instructor/driving_instructor.dart';
@@ -91,9 +92,14 @@ List<AppInfo> _apps = [
         var sensorManager = wearable.requireCapability<SensorManager>();
         return FutureBuilder(
           future: Future(() async {
-            // These are async, and have to be loaded beforehand
-            await CurrentLocationTracker().init();
-            await ActiveSettings().init();
+            // These are async, and have to be loaded beforehand.
+            //
+            // It might take some time to load everything, so they are loaded in parallel.
+            await (
+              ActiveSettings().init(),
+              AssetFinder().init(),
+              CurrentLocationTracker().init()
+            ).wait;
             return true;
           }),
           builder: (context, snapshot) {
