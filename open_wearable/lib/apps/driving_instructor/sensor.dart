@@ -42,7 +42,6 @@ abstract class SensorTracker {
     Duration targetDuration = const Duration(milliseconds: 500),
   });
 
-  // TODO: It might be better to refactor streamGyroStatus to return a Vector3?
   Stream<SensorStatus> streamStatus();
 
   Stream<SensorStatus> streamGyroStatus();

@@ -164,6 +164,8 @@ class _AccelerationTracker extends ValueNotifier<_DetectionStatus> {
               Duration(seconds: 3) &&
           event.y.abs() < ActiveSettings().accelDetectionEnd()) {
         print("Adding acceleration/braking log entry");
+        _lastDetectionTime = DateTime.now();
+
         ActiveSettings().addLogEntry(
           LogEntryCard(
             kind: _DetectionStatus.acceleration == super.value
@@ -397,7 +399,7 @@ class _MotionDisplayState extends State<MotionDisplay> {
               );
             }
 
-            var targetWidth = (MediaQuery.of(context).size.width - 30.0) / 2.0;
+            var targetWidth = (MediaQuery.of(context).size.width - 50.0) / 2.0;
 
             return Row(
               mainAxisAlignment: MainAxisAlignment.center,

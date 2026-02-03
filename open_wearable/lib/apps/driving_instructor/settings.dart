@@ -107,8 +107,8 @@ class ActiveSettings with ChangeNotifier {
     _prefs.setDouble('pollingFrequency', value);
   }
 
-  int mirrorCheckCountPerMinute() {
-    return _prefs.getInt('mirrorCheckCount') ?? 4;
+  double _mirrorCheckCountPerMinute() {
+    return _prefs.getDouble('mirrorCheckCount') ?? 3.0;
   }
 
   Duration mirrorCheckDuration() {
@@ -118,13 +118,12 @@ class ActiveSettings with ChangeNotifier {
     // The below uses milliseconds for better precision in case the number does not divide
     // nicely.
     return Duration(
-      milliseconds:
-          (1000.0 * 60.0 / mirrorCheckCountPerMinute().toDouble()).toInt(),
+      milliseconds: (1000.0 * 60.0 / _mirrorCheckCountPerMinute()).toInt(),
     );
   }
 
-  void _setMirrorCheckCountPerMinute(int count) {
-    _prefs.setInt('mirrorCheckCount', count);
+  void _setMirrorCheckCountPerMinute(double count) {
+    _prefs.setDouble('mirrorCheckCount', count);
   }
 
   double accelerationThreshold() {
@@ -240,6 +239,9 @@ class ActiveSettings with ChangeNotifier {
       return;
     }
 
+    print(
+      "Playing warning sound: $soundPath, selected sound: ${warningSound()}",
+    );
     AudioPlayer().play(AssetSource("../$soundPath"));
   }
 
@@ -386,13 +388,13 @@ class _SettingsState extends State<SettingsScreen> {
         _ValueRange(
           name:
               "How frequently mirrors should be checked (number of checks per minute)",
-          value: ActiveSettings().mirrorCheckCountPerMinute().toDouble(),
+          value: ActiveSettings()._mirrorCheckCountPerMinute(),
           onChanged: (value) => setState(
-            () => ActiveSettings()._setMirrorCheckCountPerMinute(value.toInt()),
+            () => ActiveSettings()._setMirrorCheckCountPerMinute(value),
           ),
-          min: 1.0,
-          max: 30.0,
-          stepSize: 1.0,
+          min: 0.1,
+          max: 6.0,
+          stepSize: 0.1,
           description:
               "If the driver does not check their mirrors at least this frequently, a warning will be issued.",
         ),
